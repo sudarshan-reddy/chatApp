@@ -38,7 +38,7 @@ func sadd(conn redis.Conn, username string) {
 
 //listener and speaker
 func listener(subChan chan string) {
-	subconn, err := redis.Dial("tcp", ":6379")
+	subconn, err := redis.Dial("tcp", "192.168.99.100:6379")
 	exitHandle(err, "")
 	defer subconn.Close()
 
@@ -77,7 +77,7 @@ func main() {
 		os.Exit(1)
 	}
 	username := os.Args[1]
-	conn, err := redis.Dial("tcp", ":6379")
+	conn, err := redis.Dial("tcp", "192.168.99.100:6379")
 	exitHandle(err, "")
 	defer conn.Close()
 	userkey := "online." + username
@@ -87,6 +87,41 @@ func main() {
 	tickChannel := time.NewTicker(time.Second * 60).C
 
 	subChan := make(chan string)
+	sayChan := make(chan string)
 	go listener(subChan)
+	go speaker(sayChan, username)
+	conn.Do("PUBLISH" , "messages" , username+" has joined.")
 
+	chatExit := false
+
+	for !chatExit{
+		select{
+		case msg := <-subChan:
+			fmt.Println(msg)
+		case <- tickChannel:
+			val, err := conn.Do("SET", userkey, username, "XX" , "EX" , "120")
+			if val == nil || err != nil{
+				fmt.Println("Reset failure")
+				chatExit = true
+			}
+		case line := <-sayChan:
+			switch (line){
+				case "/exit" : 
+					chatExit = true
+				case "/who" :
+					names, _ := redis.String(conn.Do("SMEMBERS" , "users"))
+					for _, name := range names{
+						fmt.Println(name)
+					}
+				default: 
+					conn.Do("PUBLISH", "messages", username+ ":" +line)
+			}
+		default : 
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	conn.Do("DEL", userkey)
+	conn.Do("SREM", "users", username)
+	conn.Do("PUBLISH", "messages", username+" has left")
 }
